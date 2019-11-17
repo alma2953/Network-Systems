@@ -52,6 +52,7 @@ void * thread(void * vargp)
     pthread_detach(pthread_self());
     free(vargp);
     echo(connfd);
+    printf("CLOSING SOCKET###\n");
     close(connfd);
     return NULL;
 }
@@ -64,99 +65,6 @@ void send_error(int connfd, char* msg)
     char errormsg[MAXLINE];
     sprintf(errormsg, "HTTP/1.1 %s\r\nContent-Type:text/plain\r\nContent-Length:0\r\n\r\n", msg);
     write(connfd, errormsg, strlen(errormsg));
-}
-
-/* Puts appropriate Content-Type field in buf based on ext */
-int get_content_type(char* buf, char* ext)
-{
-  if(!strcmp(ext, "html")){
-    strcpy(buf, "text/html");
-  } else if (!strcmp(ext, "txt")){
-    strcpy(buf, "text/plain");
-  } else if (!strcmp(ext, "png")){
-    strcpy(buf, "image/png");
-  } else if (!strcmp(ext, "gif")){
-    strcpy(buf, "image/gif");
-  } else if (!strcmp(ext, "jpg")){
-    strcpy(buf, "image/jpg");
-  } else if (!strcmp(ext, "css")){
-    strcpy(buf, "text/css");
-  } else if (!strcmp(ext, "js")){
-    strcpy(buf, "application/javascript");
-  } else {
-    return -1;
-  }
-  return 0;
-}
-
-void get_req(int connfd, char* fname, char* version)
-{
-  FILE* f;
-  ssize_t fsize;
-  char file_extension[MAXBUF];
-  char content_type[MAXBUF]; // String to be placed in content-type field of response
-  char relative_dir[MAXBUF]; // Stores filename relative to server directory
-
-  if(!strcmp(fname, "/")){ // Default - get homepage
-    printf("Default page requested\n");
-    f = fopen("www/index.html", "rb");
-
-    // Calculate file size to put in header
-    fseek(f, 0L, SEEK_END);
-    fsize = ftell(f);
-    rewind(f);
-    printf("Filesize: %d\n", (int)fsize);
-
-    strcpy(file_extension, "html");
-  } else { // Get specified file
-    strcat(relative_dir, "www");
-    strcat(relative_dir, fname);
-    printf("File requested: %s\n", fname+1);
-    f = fopen(relative_dir, "rb");
-
-    if(f == NULL){
-      printf("Cannot open file %s\n", fname+1);
-      send_error(connfd, "500 Internal Server Error");
-      return;
-    }
-
-    // Calculate file size to put in header
-    fseek(f, 0L, SEEK_END);
-    fsize = ftell(f);
-    rewind(f);
-    printf("Filesize: %d\n", (int)fsize);
-
-    char* dot = strchr(fname, '.'); // Find pointer to '.' char in filename, extension starts at the next char
-    if(!dot){
-      printf("Cannot find extension of file %s\n", fname+1);
-      send_error(connfd, "500 Internal Server Error");
-      return;
-    }
-    strncpy(file_extension, dot+1, 4); // Copy up to 4 bytes of extension after '.'
-  }
-
-  printf("File extension: %s\n", file_extension);
-
-  if(get_content_type(content_type, file_extension) == -1){ // fills content_type based on extension, returns -1 on error
-    printf("Unsupported extension %s\nResponding with error\n", file_extension);
-      send_error(connfd, "500 Internal Server Error");
-    return;
-  }
-
-  printf("Content type: %s\n", content_type);
-
-  char file_contents[fsize];
-  fread(file_contents, 1, fsize, f);
-
-  char header[MAXBUF];
-  sprintf(header, "%s 200 Document Follows\r\nContent-Type:%s\r\nContent-Length:%ld\r\n\r\n", version, content_type, fsize);
-
-  char http_response[fsize + strlen(header)];
-  strcpy(http_response, header);
-  memcpy(http_response+strlen(header), file_contents, fsize); // Using strcpy fails on non-text files because of the precense of '\0' bytes
-
-  printf("Sending http response to server: \n\n%s", http_response);
-  write(connfd, http_response, fsize+strlen(header));
 }
 
 
@@ -182,7 +90,7 @@ void echo(int connfd)
     char* version = strtok(NULL, "\r"); // HTTP/1.1 or HTTP/1.0
     char fname[MAXLINE];
 
-    printf("Request type: %s\nHostname: %s\nVersion:%s\n", request, hostname, version);
+    printf("Request type: %s\nHostname: %s\nVersion: %s\n", request, hostname, version);
 
     if(hostname == NULL || version == NULL){
       printf("Hostname or version is NULL\n");
@@ -204,31 +112,36 @@ void echo(int connfd)
     }
 
     if(!strcmp(request, "GET")){
-      //get_req(connfd, hostname, version);
     } else {
       printf("Invalid HTTP request: %s\nResponding with 400 error\n", request);
       send_error(connfd, "400 Bad Request");
       return;
     }
 
-    char* slash = strrchr(hostname, '/');
+    char* doubleSlash = strstr(hostname, "//");
+    if(doubleSlash != NULL){
+        hostname = doubleSlash+2;
+    }
+    printf("\n\n\n##############HOSTNAME: %s\n#########\n\n", hostname);
+    char* slash = strchr(hostname, '/');
+    printf("Byte after slash: %x\n", *(slash+1) && 0xff);
     if(*(slash+1) == '\0'){ //If no file is explicitly requested, get default
       printf("Default page requested\n");
       strcpy(fname, "index.html");
     } else { //Otherwise, copy requested filename to buffer
       strcpy(fname, slash+1);
       printf("Host: %s\nFile: %s\n", hostname, fname);
-    }
+  }
 
     // Set the slash to null terminator as it will fail gethostbyname otherwise
     // e.g google.com/ will fail, while google.com will work
     *slash = '\0';
 
-    slash = strrchr(hostname, '/'); //This will point to the last / in http://
+    //slash = strrchr(hostname, '/'); //This will point to the last / in http://
 
     // Set hostname to start after, as it will fail gethostbyname otherwise
     // e.g http://google.com will fail, while google.com will work
-    hostname = slash+1;
+    //hostname = slash+1;
 
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0){
@@ -258,26 +171,33 @@ void echo(int connfd)
       return;
     }
 
-
-    sprintf(buf, "GET /%s HTTP/1.1", fname);
+    printf("Hostname into header: %s\n", hostname);
+    printf("\n###\n\nVersion into header: %s\n\n###\n", version);
+    memset(buf, 0, sizeof(buf));
+    sprintf(buf, "GET /%s %s\r\nHost: %s\r\n\r\n", fname, version, hostname);
+    printf("Get request is:\n%s", buf);
 
     printf("sending\n");
 
     size = write(sockfd, buf, strlen(buf));
-    if (size < 0)
+    if (size < 0){
         printf("ERROR in sendto\n");
         return;
+    }
 
     printf("sent\n");
     memset(buf, 0, sizeof(buf));
     size = read(sockfd, buf, sizeof(buf));
-    if (size < 0)
+    if (size < 0){
         printf("ERROR in recvfrom\n");
         return;
+    }
 
     printf("received\n");
 
     printf("BUFFER RESPONSE ########:\n\n%s\n", buf);
+
+    size = write(connfd, buf, sizeof(buf));
 }
 
 /*
