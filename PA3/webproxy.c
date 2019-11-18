@@ -170,34 +170,50 @@ void echo(int connfd)
       printf("ERROR in connect\n");
       return;
     }
+    //
+    // char tmpbuf[MAXLINE];
+    // printf("Hostname into header: %s\n", hostname);
+    // memset(tmpbuf, 0, sizeof(tmpbuf));
+    // sprintf(tmpbuf, "GET /%s %s\r\nHost: %s\r\n\r\n", fname, version, hostname);
+    // printf("Get request is:\n%s\n\n", tmpbuf);
+    //
+    // printf("sending\n");
+    //
+    // size = write(sockfd, tmpbuf, strlen(buf));
+    // if (size < 0){
+    //     printf("ERROR in sendto\n");
+    //     return;
+    // }
 
     printf("Hostname into header: %s\n", hostname);
-    printf("\n###\n\nVersion into header: %s\n\n###\n", version);
     memset(buf, 0, sizeof(buf));
+    printf("Buf after memset:\n%s\n", buf);
     sprintf(buf, "GET /%s %s\r\nHost: %s\r\n\r\n", fname, version, hostname);
-    printf("Get request is:\n%s", buf);
+    printf("Get request is:\n%s\n\n", buf);
 
     printf("sending\n");
 
-    size = write(sockfd, buf, strlen(buf));
+    size = write(sockfd, buf, sizeof(buf));
     if (size < 0){
         printf("ERROR in sendto\n");
         return;
     }
-
     printf("sent\n");
+
     memset(buf, 0, sizeof(buf));
-    size = read(sockfd, buf, sizeof(buf));
-    if (size < 0){
-        printf("ERROR in recvfrom\n");
-        return;
+    while((size = read(sockfd, buf, sizeof(buf)))> 0){
+      if (size < 0){
+          printf("ERROR in recvfrom\n");
+          return;
+      }
+
+      printf("received %d bytes####\n", size);
+
+      printf("BUFFER RESPONSE ########:\n\n%s\n", buf);
+
+      write(connfd, buf, size);
+      memset(buf, 0, sizeof(buf));
     }
-
-    printf("received\n");
-
-    printf("BUFFER RESPONSE ########:\n\n%s\n", buf);
-
-    size = write(connfd, buf, sizeof(buf));
 }
 
 /*
