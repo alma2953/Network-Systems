@@ -43,6 +43,7 @@ int main(int argc, char **argv)
 	*connfdp = accept(listenfd, (struct sockaddr*)&clientaddr, &clientlen);
 	pthread_create(&tid, NULL, thread, connfdp);
     }
+    printf("outside of while loop\n");
 }
 
 /* thread routine */
@@ -52,7 +53,7 @@ void * thread(void * vargp)
     pthread_detach(pthread_self());
     free(vargp);
     echo(connfd);
-    printf("CLOSING SOCKET###\n");
+    printf("CLOSING SOCKET %d\n", connfd);
     close(connfd);
     return NULL;
 }
@@ -65,6 +66,29 @@ void send_error(int connfd, char* msg)
     char errormsg[MAXLINE];
     sprintf(errormsg, "HTTP/1.1 %s\r\nContent-Type:text/plain\r\nContent-Length:0\r\n\r\n", msg);
     write(connfd, errormsg, strlen(errormsg));
+}
+
+int is_blacklisted(char* hostname, char* ip){
+  FILE* fp;
+  char line[100];
+  char* newline;
+  if(access("blacklist", F_OK) == -1){
+    printf("No blacklist found\n");
+    return 0;
+  }
+  fp = fopen("blacklist", "r");
+  while(fgets(line, sizeof(line), fp)){
+    newline = strchr(line, '\n');
+    if(newline != NULL){
+      *newline = '\0';
+    }
+    if(strstr(line, hostname) || strstr(line, ip)){
+      printf("Blacklist match found: %s\n", line);
+      return 1;
+    }
+  }
+  printf("No blacklist match found\n");
+  return 0;
 }
 
 
@@ -124,18 +148,24 @@ void echo(int connfd)
     }
     printf("\n\n\n##############HOSTNAME: %s\n#########\n\n", hostname);
     char* slash = strchr(hostname, '/');
-    printf("Byte after slash: %x\n", *(slash+1) && 0xff);
-    if(*(slash+1) == '\0'){ //If no file is explicitly requested, get default
+    if(slash == NULL || *(slash+1) == '\0'){ //If no file is explicitly requested, get default
       printf("Default page requested\n");
       strcpy(fname, "index.html");
-    } else { //Otherwise, copy requested filename to buffer
+    }
+
+    else { //Otherwise, copy requested filename to buffer
       strcpy(fname, slash+1);
       printf("Host: %s\nFile: %s\n", hostname, fname);
-  }
+    }
+
+    if(slash != NULL){
+      *slash = '\0';
+    }
+
 
     // Set the slash to null terminator as it will fail gethostbyname otherwise
     // e.g google.com/ will fail, while google.com will work
-    *slash = '\0';
+
 
     //slash = strrchr(hostname, '/'); //This will point to the last / in http://
 
@@ -148,6 +178,8 @@ void echo(int connfd)
       printf("ERROR opening socket");
     }
 
+
+
     server = gethostbyname(hostname);
     if(server == NULL){
       printf("Unable to resolve host %s, responding with 404 error\n", hostname);
@@ -155,13 +187,27 @@ void echo(int connfd)
       return;
     }
 
-    printf("Host: %s, IP: %s\n", hostname, server->h_addr);
+
 
     bzero((char *) &serveraddr, sizeof(serveraddr));
     serveraddr.sin_family = AF_INET;
     bcopy((char *)server->h_addr,
     (char *)&serveraddr.sin_addr.s_addr, server->h_length);
     serveraddr.sin_port = htons(portno);
+
+
+    char IPbuf[20];
+    if (inet_ntop(AF_INET, server->h_addr, IPbuf, (socklen_t)20) == NULL){
+      printf("ERROR in converting hostname to IP\n");
+      return;
+    }
+
+    printf("Host: %s, IP: %s\nChecking blacklist\n", hostname, IPbuf);
+    if(is_blacklisted(hostname, IPbuf)){
+      send_error(connfd, "403 Forbidden");
+      return;
+    }
+
 
     int serverlen = sizeof(serveraddr);
 
@@ -170,24 +216,9 @@ void echo(int connfd)
       printf("ERROR in connect\n");
       return;
     }
-    //
-    // char tmpbuf[MAXLINE];
-    // printf("Hostname into header: %s\n", hostname);
-    // memset(tmpbuf, 0, sizeof(tmpbuf));
-    // sprintf(tmpbuf, "GET /%s %s\r\nHost: %s\r\n\r\n", fname, version, hostname);
-    // printf("Get request is:\n%s\n\n", tmpbuf);
-    //
-    // printf("sending\n");
-    //
-    // size = write(sockfd, tmpbuf, strlen(buf));
-    // if (size < 0){
-    //     printf("ERROR in sendto\n");
-    //     return;
-    // }
 
     printf("Hostname into header: %s\n", hostname);
-    memset(buf, 0, sizeof(buf));
-    printf("Buf after memset:\n%s\n", buf);
+    memset(buf, 0, MAXLINE);
     sprintf(buf, "GET /%s %s\r\nHost: %s\r\n\r\n", fname, version, hostname);
     printf("Get request is:\n%s\n\n", buf);
 
