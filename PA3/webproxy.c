@@ -8,11 +8,15 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <errno.h>
 #include <sys/time.h>
 
 #define MAXLINE  8192  /* max text line length */
 #define MAXBUF   8192  /* max I/O buffer size */
 #define LISTENQ  1024  /* second argument to listen() */
+
+char cacheDNS[MAXLINE];
+pthread_mutex_t dns_lock;
 
 int open_listenfd(int port);
 void echo(int connfd);
@@ -24,6 +28,8 @@ int main(int argc, char **argv)
     struct sockaddr_in clientaddr;
     struct timeval timeout;
     pthread_t tid;
+
+    memset(cacheDNS, 0, sizeof(cacheDNS));
 
     if (argc == 2){
       timeout.tv_sec = 60;
@@ -38,6 +44,10 @@ int main(int argc, char **argv)
     port = atoi(argv[1]);
 
     listenfd = open_listenfd(port);
+    if(pthread_mutex_init(&dns_lock, NULL) != 0){
+      printf("Cannot init mutex\n");
+      return -1;
+    }
     while (1) {
 	connfdp = malloc(sizeof(int));
 	*connfdp = accept(listenfd, (struct sockaddr*)&clientaddr, &clientlen);
@@ -87,10 +97,51 @@ int is_blacklisted(char* hostname, char* ip){
       return 1;
     }
   }
+  fclose(fp);
   printf("No blacklist match found\n");
   return 0;
 }
 
+int check_dns_cache(char* hostname, struct in_addr* cache_addr){
+  printf("Checking for %s in cache!!!\nCurrently cache is \n%s\n", hostname, cacheDNS);
+  /*for(int i = 0; i < 100; i++){
+    printf("%d: %c=%x\n", i, cacheDNS[i], cacheDNS[i]);
+  }*/
+  char* line;
+  char* tmpbuf = calloc(strlen(cacheDNS)+1, sizeof(char));
+  strcpy(tmpbuf, cacheDNS);
+  //line = strtok_r(cacheDNS, "\n", &tmp);
+  char* match = strstr(tmpbuf, hostname);
+  if(match == NULL){ // Hostname not in cache
+    return -1;
+  }
+  line = strtok(match, ":"); //PROBLEM
+  line = strtok(NULL, "\n");
+  printf("Found DNS cache entry %s:%s\n", hostname, line);
+  inet_pton(AF_INET, line, cache_addr);
+  free(tmpbuf);
+}
+
+int add_ip_to_cache(char* hostname, char* ip){
+
+  pthread_mutex_lock(&dns_lock);
+  char* entry = strrchr(cacheDNS, '\n');
+  char buf[100];
+  memset(buf, 0, sizeof(buf));
+  snprintf(buf, 100, "%s:%s\n", hostname, ip);
+  if(entry == NULL){
+    printf("Cache empty\n");
+    strncpy(cacheDNS, buf, strlen(buf));
+    pthread_mutex_unlock(&dns_lock);
+    return 0;
+  }
+  if(entry + strlen(buf)+1 > cacheDNS+sizeof(cacheDNS)){ // Cache full
+    return -1;
+    pthread_mutex_unlock(&dns_lock);
+  }
+  strncpy(entry+1, buf, strlen(buf));
+  pthread_mutex_unlock(&dns_lock);
+}
 
 /*
  * echo - read and echo text lines until client closes connection
@@ -146,7 +197,6 @@ void echo(int connfd)
     if(doubleSlash != NULL){
         hostname = doubleSlash+2;
     }
-    printf("\n\n\n##############HOSTNAME: %s\n#########\n\n", hostname);
     char* slash = strchr(hostname, '/');
     if(slash == NULL || *(slash+1) == '\0'){ //If no file is explicitly requested, get default
       printf("Default page requested\n");
@@ -178,28 +228,39 @@ void echo(int connfd)
       printf("ERROR opening socket");
     }
 
-
-
-    server = gethostbyname(hostname);
-    if(server == NULL){
-      printf("Unable to resolve host %s, responding with 404 error\n", hostname);
-      send_error(connfd, "404 Not Found");
-      return;
-    }
-
-
-
     bzero((char *) &serveraddr, sizeof(serveraddr));
     serveraddr.sin_family = AF_INET;
-    bcopy((char *)server->h_addr,
-    (char *)&serveraddr.sin_addr.s_addr, server->h_length);
     serveraddr.sin_port = htons(portno);
 
 
+    struct in_addr cache_addr;
+    int serveraddr_cache = check_dns_cache(hostname, &cache_addr);
+    if(serveraddr_cache == -1){ // not in cache
+      printf("Host %s not in DNS cache\n", hostname);
+      server = gethostbyname(hostname);
+      if(server == NULL){
+        printf("Unable to resolve host %s, responding with 404 error\n", hostname);
+        send_error(connfd, "404 Not Found");
+        return;
+      }
+      bcopy((char *)server->h_addr,
+      (char *)&serveraddr.sin_addr.s_addr, server->h_length);
+    } else { //in cache
+      serveraddr.sin_addr.s_addr = cache_addr.s_addr;
+    }
+
+
     char IPbuf[20];
-    if (inet_ntop(AF_INET, server->h_addr, IPbuf, (socklen_t)20) == NULL){
+    if (inet_ntop(AF_INET, (char *)&serveraddr.sin_addr.s_addr, IPbuf, (socklen_t)20) == NULL){
       printf("ERROR in converting hostname to IP\n");
       return;
+    }
+
+    if(serveraddr_cache == -1){ // Add dot quad IP to cache
+      int success = add_ip_to_cache(hostname, IPbuf);
+      if(success == -1){
+        printf("Cache full, cannot add entry %s:%s\n", hostname, IPbuf);
+      }
     }
 
     printf("Host: %s, IP: %s\nChecking blacklist\n", hostname, IPbuf);
@@ -211,6 +272,7 @@ void echo(int connfd)
 
     int serverlen = sizeof(serveraddr);
 
+
     size = connect(sockfd, (struct sockaddr*)&serveraddr, serverlen);
     if (size < 0){
       printf("ERROR in connect\n");
@@ -220,7 +282,7 @@ void echo(int connfd)
     printf("Hostname into header: %s\n", hostname);
     memset(buf, 0, MAXLINE);
     sprintf(buf, "GET /%s %s\r\nHost: %s\r\n\r\n", fname, version, hostname);
-    printf("Get request is:\n%s\n\n", buf);
+    //printf("Get request is:\n%s\n\n", buf);
 
     printf("sending\n");
 
@@ -231,6 +293,7 @@ void echo(int connfd)
     }
     printf("sent\n");
 
+    int total_size = 0;
     memset(buf, 0, sizeof(buf));
     while((size = read(sockfd, buf, sizeof(buf)))> 0){
       if (size < 0){
@@ -238,13 +301,19 @@ void echo(int connfd)
           return;
       }
 
-      printf("received %d bytes####\n", size);
+      total_size += size;
 
-      printf("BUFFER RESPONSE ########:\n\n%s\n", buf);
+
+      //printf("BUFFER RESPONSE ########:\n\n%s\n", buf);
 
       write(connfd, buf, size);
       memset(buf, 0, sizeof(buf));
     }
+    if(size == -1){
+      printf("Error in read - errno:%d\n", errno);
+      return;
+    }
+    printf("received a total of %d bytes\n", total_size);
 }
 
 /*
