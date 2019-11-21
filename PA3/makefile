@@ -1,5 +1,5 @@
 make:
-	-gcc webproxy.c -pthread -o webproxy
+	-gcc webproxy.c -pthread -lcrypto -o webproxy
 
 clean:
 	-rm webproxy
