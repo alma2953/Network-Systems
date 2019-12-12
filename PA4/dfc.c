@@ -438,7 +438,7 @@ void sendChunk(char* chunk, char* fname, char chunkChar, int dfsIdx, size_t len)
 
   printf("Sending chunk, size: %d\n", (int)len);
   sendtoDFS(chunk, dfsIdx, len);
-  printf("Sent chunk\n");
+  //printf("Sent chunk\n");
 }
 
 void printFiles(char* f1, char* f2, char* f3, char* f4){
