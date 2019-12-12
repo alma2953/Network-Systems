@@ -7,6 +7,7 @@
 #include <netdb.h>
 #include <dirent.h>
 #include <errno.h>
+#include <time.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -96,6 +97,8 @@ int main(int argc, char** argv){
     printf("\nEnter one of the following commands:\n * get [filename]\n * put [filename]\n * ls\n> ");
     fgets(userInput, BUF, stdin);
     sscanf(userInput, "%s %s", cmd, fname);
+
+    printf("\n");
 
     createSocket(DFS1, port1);
     createSocket(DFS2, port2);
@@ -371,30 +374,39 @@ int hasChunk(char* fname, int chunk, int dfsIdx){
   strcat(cmdbuf, ".");
   strncat(cmdbuf, &chunkChar, 1);
 
-  printf("Sending command: %s\n", cmdbuf);
+  //printf("Sending command: %s\n", cmdbuf);
+
+  memset(buf, 0, sizeof(buf));
 
   sendtoDFS(cmdbuf, dfsIdx, strlen(cmdbuf));
 
-  memset(buf, 0, sizeof(buf));
   n = read(sockfd[dfsIdx], buf, BUF);
   if(n <= 0){
     printf("DFS%d is down.\n", dfsIdx+1);
     return -1;
   }
   if(!strcmp(buf, "dne")){
-    printf("File %s is not present on DFS%d\n", fname, dfsIdx+1);
+    printf("File %s.%d is not present on DFS%d\n", fname, chunk, dfsIdx+1);
+    return 0;
+  } else if(!strncmp(buf, "fsize:", 6)){
+    char* fsize = strchr(buf, ':');
+    if(fsize == NULL){
+      return 0;
+    }
+    printf("File %s.%d exists on DFS%d - size %d bytes\n", fname, chunk, dfsIdx+1, atoi(fsize+1));
+    return atoi(fsize+1);
+  } else {
     return 0;
   }
-  printf("FILE EXISTS, SIZE %d BYTES\n", atoi(buf));
-  return atoi(buf);
+
 }
 
 void getChunk(int dfsIdx, int chunkSize, FILE* f){
   char fileChunk[chunkSize];
   memset(fileChunk, 0, chunkSize);
-  write(sockfd[dfsIdx], "ready", 5);
-  read(sockfd[dfsIdx], fileChunk, chunkSize);
-  printf("Received from server####:\n%s\n", fileChunk);
+  write(sockfd[dfsIdx], "ready", 6);
+  int n = read(sockfd[dfsIdx], fileChunk, chunkSize);
+  printf("Succesfully read %d bytes\n", n);
   fwrite(fileChunk, 1, chunkSize, f);
 }
 
@@ -417,6 +429,12 @@ void sendChunk(char* chunk, char* fname, char chunkChar, int dfsIdx, size_t len)
   printf("Sending command to DFS%d: %s\n", dfsIdx+1, cmd);
 
   sendtoDFS(cmd, dfsIdx, strlen(cmd) + 1);
+
+  //char ready_buf[5];
+  //read(sockfd[dfsIdx], ready_buf, 5);
+  //sleep(1);
+  struct timespec t = {0, 100000000};
+  nanosleep(&t, NULL);
 
   printf("Sending chunk, size: %d\n", (int)len);
   sendtoDFS(chunk, dfsIdx, len);
@@ -596,9 +614,7 @@ int sendtoDFS(char* msg, int dfsIdx, size_t len){
   return n;
 }
 
-void sigpipe_handler(int signum){
-
-}
+void sigpipe_handler(int signum){}
 
 //! Returns md5sum % 4 of file fname, implementation from https://stackoverflow.com/questions/10324611/how-to-calculate-the-md5-hash-of-a-large-file-in-c
 int hashBucket(char* fname){

@@ -98,15 +98,18 @@ void process(int connfd){
       if(stat(filepath, &s) == 0){
         fsize = (int)s.st_size;
         if(fsize == 0){
-          write(connfd, "dne", 3);
+          printf("File not found\n");
+          write(connfd, "dne", 4);
           continue;
         }
-        printf("File size: %d\n", fsize);
-        char str[32];
-        sprintf(str, "%d", fsize);
+        //printf("File size: %d\n", fsize);
+        char str[128];
+        sprintf(str, "fsize:%d", fsize);
+        printf("Sending file size to server: %s\n", str);
         write(connfd, str, strlen(str));
       } else {
-        write(connfd, "dne", 3);
+        printf("File not found\n");
+        write(connfd, "dne", 4);
         continue;
       }
 
@@ -119,9 +122,8 @@ void process(int connfd){
       fread(chunk, fsize, 1, f);
       fclose(f);
 
-      char ready_buf[5];
-      read(connfd, ready_buf, 5);
-      printf("Read file: \n%s\n", chunk);
+      char ready_buf[6];
+      read(connfd, ready_buf, 6);
       write(connfd, chunk, fsize);
     }
 
@@ -150,18 +152,16 @@ void process(int connfd){
         continue;
       }
 
-      printf("1\n");
+
       char filebuf[fileSize];
-      memset(filebuf, 0, sizeof(filebuf));
-      printf("2\n");
+      //memset(filebuf, 0, sizeof(filebuf));
+
       n = read(connfd, filebuf, fileSize);
-      printf("3\n");
       printf("Received %d bytes:\n", (int)n);
       if(n < 0){
         printf("Error in put:read\n");
         break;
       }
-      printf("4\n");
       fwrite(filebuf, 1, n, f);
       memset(filebuf, 0, sizeof(filebuf));
 
@@ -244,9 +244,10 @@ bool auth(char* msg, char* userBuf){
 void createUserDir(char* user){
   DIR* d;
   char dirpath[strlen(path) + strlen(user) + 3]; //3 bytes for preceding '.', slash before user, and null terminator
+  memset(dirpath, 0, sizeof(dirpath));
 
-  strcpy(dirpath, ".");
-  strcat(dirpath, path);
+  //strcpy(dirpath, ".");
+  strcpy(dirpath, path+1);
   strcat(dirpath, "/");
   strcat(dirpath, user);
 
@@ -255,6 +256,7 @@ void createUserDir(char* user){
   d = opendir(dirpath);
   if(d){
     printf("Directory exists\n");
+    closedir(d);
   } else if(errno == ENOENT){
     printf("Directory does not exist, creating...\n");
     if(mkdir(dirpath, 0777) != 0){
